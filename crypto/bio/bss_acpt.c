@@ -1,15 +1,17 @@
 /*
- * Copyright 1995-2018 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1995-2023 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
  */
 
+#define OPENSSL_SUPPRESS_DEPRECATED
+
 #include <stdio.h>
 #include <errno.h>
-#include "bio_lcl.h"
+#include "bio_local.h"
 
 #ifndef OPENSSL_NO_SOCK
 
@@ -54,7 +56,9 @@ static void BIO_ACCEPT_free(BIO_ACCEPT *a);
 static const BIO_METHOD methods_acceptp = {
     BIO_TYPE_ACCEPT,
     "socket accept",
+    bwrite_conv,
     acpt_write,
+    bread_conv,
     acpt_read,
     acpt_puts,
     NULL,                       /* connect_gets,         */
@@ -66,7 +70,7 @@ static const BIO_METHOD methods_acceptp = {
 
 const BIO_METHOD *BIO_s_accept(void)
 {
-    return (&methods_acceptp);
+    return &methods_acceptp;
 }
 
 static int acpt_new(BIO *bi)
@@ -77,29 +81,30 @@ static int acpt_new(BIO *bi)
     bi->num = (int)INVALID_SOCKET;
     bi->flags = 0;
     if ((ba = BIO_ACCEPT_new()) == NULL)
-        return (0);
+        return 0;
     bi->ptr = (char *)ba;
     ba->state = ACPT_S_BEFORE;
     bi->shutdown = 1;
-    return (1);
+    return 1;
 }
 
 static BIO_ACCEPT *BIO_ACCEPT_new(void)
 {
     BIO_ACCEPT *ret;
 
-    if ((ret = OPENSSL_zalloc(sizeof(*ret))) == NULL)
-        return (NULL);
+    if ((ret = OPENSSL_zalloc(sizeof(*ret))) == NULL) {
+        ERR_raise(ERR_LIB_BIO, ERR_R_MALLOC_FAILURE);
+        return NULL;
+    }
     ret->accept_family = BIO_FAMILY_IPANY;
     ret->accept_sock = (int)INVALID_SOCKET;
-    return (ret);
+    return ret;
 }
 
 static void BIO_ACCEPT_free(BIO_ACCEPT *a)
 {
     if (a == NULL)
         return;
-
     OPENSSL_free(a->param_addr);
     OPENSSL_free(a->param_serv);
     BIO_ADDRINFO_free(a->addr_first);
@@ -129,7 +134,7 @@ static int acpt_free(BIO *a)
     BIO_ACCEPT *data;
 
     if (a == NULL)
-        return (0);
+        return 0;
     data = (BIO_ACCEPT *)a->ptr;
 
     if (a->shutdown) {
@@ -139,7 +144,7 @@ static int acpt_free(BIO *a)
         a->flags = 0;
         a->init = 0;
     }
-    return (1);
+    return 1;
 }
 
 static int acpt_state(BIO *b, BIO_ACCEPT *c)
@@ -151,10 +156,10 @@ static int acpt_state(BIO *b, BIO_ACCEPT *c)
         switch (c->state) {
         case ACPT_S_BEFORE:
             if (c->param_addr == NULL && c->param_serv == NULL) {
-                BIOerr(BIO_F_ACPT_STATE, BIO_R_NO_ACCEPT_ADDR_OR_SERVICE_SPECIFIED);
-                ERR_add_error_data(4,
-                                   "hostname=", c->param_addr,
-                                   " service=", c->param_serv);
+                ERR_raise_data(ERR_LIB_BIO,
+                               BIO_R_NO_ACCEPT_ADDR_OR_SERVICE_SPECIFIED,
+                               "hostname=%s, service=%s",
+                               c->param_addr, c->param_serv);
                 goto exit_loop;
             }
 
@@ -183,11 +188,11 @@ static int acpt_state(BIO *b, BIO_ACCEPT *c)
                               * at least the "else" part will always be
                               * compiled.
                               */
-#ifdef AF_INET6
+#if OPENSSL_USE_IPV6
                         family = AF_INET6;
                     } else {
 #endif
-                        BIOerr(BIO_F_ACPT_STATE, BIO_R_UNAVAILABLE_IP_FAMILY);
+                        ERR_raise(ERR_LIB_BIO, BIO_R_UNAVAILABLE_IP_FAMILY);
                         goto exit_loop;
                     }
                     break;
@@ -198,7 +203,7 @@ static int acpt_state(BIO *b, BIO_ACCEPT *c)
                     family = AF_UNSPEC;
                     break;
                 default:
-                    BIOerr(BIO_F_ACPT_STATE, BIO_R_UNSUPPORTED_IP_FAMILY);
+                    ERR_raise(ERR_LIB_BIO, BIO_R_UNSUPPORTED_IP_FAMILY);
                     goto exit_loop;
                 }
                 if (BIO_lookup(c->param_addr, c->param_serv, BIO_LOOKUP_SERVER,
@@ -206,31 +211,37 @@ static int acpt_state(BIO *b, BIO_ACCEPT *c)
                     goto exit_loop;
             }
             if (c->addr_first == NULL) {
-                BIOerr(BIO_F_ACPT_STATE, BIO_R_LOOKUP_RETURNED_NOTHING);
+                ERR_raise(ERR_LIB_BIO, BIO_R_LOOKUP_RETURNED_NOTHING);
                 goto exit_loop;
             }
-            /* We're currently not iterating, but set this as preparation
-             * for possible future development in that regard
-             */
             c->addr_iter = c->addr_first;
             c->state = ACPT_S_CREATE_SOCKET;
             break;
 
         case ACPT_S_CREATE_SOCKET:
-            ret = BIO_socket(BIO_ADDRINFO_family(c->addr_iter),
-                             BIO_ADDRINFO_socktype(c->addr_iter),
-                             BIO_ADDRINFO_protocol(c->addr_iter), 0);
-            if (ret == (int)INVALID_SOCKET) {
-                SYSerr(SYS_F_SOCKET, get_last_socket_error());
-                ERR_add_error_data(4,
-                                   "hostname=", c->param_addr,
-                                   " service=", c->param_serv);
-                BIOerr(BIO_F_ACPT_STATE, BIO_R_UNABLE_TO_CREATE_SOCKET);
+            ERR_set_mark();
+            s = BIO_socket(BIO_ADDRINFO_family(c->addr_iter),
+                           BIO_ADDRINFO_socktype(c->addr_iter),
+                           BIO_ADDRINFO_protocol(c->addr_iter), 0);
+            if (s == (int)INVALID_SOCKET) {
+                if ((c->addr_iter = BIO_ADDRINFO_next(c->addr_iter)) != NULL) {
+                    /*
+                     * if there are more addresses to try, do that first
+                     */
+                    ERR_pop_to_mark();
+                    break;
+                }
+                ERR_clear_last_mark();
+                ERR_raise_data(ERR_LIB_SYS, get_last_socket_error(),
+                               "calling socket(%s, %s)",
+                                c->param_addr, c->param_serv);
+                ERR_raise(ERR_LIB_BIO, BIO_R_UNABLE_TO_CREATE_SOCKET);
                 goto exit_loop;
             }
-            c->accept_sock = ret;
-            b->num = ret;
+            c->accept_sock = s;
+            b->num = s;
             c->state = ACPT_S_LISTEN;
+            s = -1;
             break;
 
         case ACPT_S_LISTEN:
@@ -300,9 +311,11 @@ static int acpt_state(BIO *b, BIO_ACCEPT *c)
             if (bio == NULL)
                 goto exit_loop;
 
+            BIO_set_callback_ex(bio, BIO_get_callback_ex(b));
+#ifndef OPENSSL_NO_DEPRECATED_3_0
             BIO_set_callback(bio, BIO_get_callback(b));
+#endif
             BIO_set_callback_arg(bio, BIO_get_callback_arg(b));
-
             /*
              * If the accept BIO has an bio_chain, we dup it and put the new
              * socket at the end.
@@ -360,12 +373,12 @@ static int acpt_read(BIO *b, char *out, int outl)
     while (b->next_bio == NULL) {
         ret = acpt_state(b, data);
         if (ret <= 0)
-            return (ret);
+            return ret;
     }
 
     ret = BIO_read(b->next_bio, out, outl);
     BIO_copy_next_retry(b);
-    return (ret);
+    return ret;
 }
 
 static int acpt_write(BIO *b, const char *in, int inl)
@@ -379,12 +392,12 @@ static int acpt_write(BIO *b, const char *in, int inl)
     while (b->next_bio == NULL) {
         ret = acpt_state(b, data);
         if (ret <= 0)
-            return (ret);
+            return ret;
     }
 
     ret = BIO_write(b->next_bio, in, inl);
     BIO_copy_next_retry(b);
-    return (ret);
+    return ret;
 }
 
 static long acpt_ctrl(BIO *b, int cmd, long num, void *ptr)
@@ -428,8 +441,10 @@ static long acpt_ctrl(BIO *b, int cmd, long num, void *ptr)
                 b->init = 1;
             } else if (num == 1) {
                 OPENSSL_free(data->param_serv);
-                data->param_serv = BUF_strdup(ptr);
-                b->init = 1;
+                if ((data->param_serv = OPENSSL_strdup(ptr)) == NULL)
+                    ret = 0;
+                else
+                    b->init = 1;
             } else if (num == 2) {
                 data->bind_mode |= BIO_SOCK_NONBLOCK;
             } else if (num == 3) {
@@ -451,7 +466,6 @@ static long acpt_ctrl(BIO *b, int cmd, long num, void *ptr)
             data->accepted_mode &= ~BIO_SOCK_NONBLOCK;
         break;
     case BIO_C_SET_FD:
-        b->init = 1;
         b->num = *((int *)ptr);
         data->accept_sock = b->num;
         data->state = ACPT_S_ACCEPT;
@@ -483,7 +497,7 @@ static long acpt_ctrl(BIO *b, int cmd, long num, void *ptr)
                 *pp = data->cache_peer_serv;
             } else if (num == 4) {
                 switch (BIO_ADDRINFO_family(data->addr_iter)) {
-#ifdef AF_INET6
+#if OPENSSL_USE_IPV6
                 case AF_INET6:
                     ret = BIO_FAMILY_IPV6;
                     break;
@@ -522,19 +536,18 @@ static long acpt_ctrl(BIO *b, int cmd, long num, void *ptr)
         ret = (long)data->bind_mode;
         break;
     case BIO_CTRL_DUP:
-/*-     dbio=(BIO *)ptr;
-        if (data->param_port) EAY EAY
-                BIO_set_port(dbio,data->param_port);
-        if (data->param_hostname)
-                BIO_set_hostname(dbio,data->param_hostname);
-        BIO_set_nbio(dbio,data->nbio); */
         break;
-
+    case BIO_CTRL_EOF:
+        if (b->next_bio == NULL)
+            ret = 0;
+        else
+            ret = BIO_ctrl(b->next_bio, cmd, num, ptr);
+        break;
     default:
         ret = 0;
         break;
     }
-    return (ret);
+    return ret;
 }
 
 static int acpt_puts(BIO *bp, const char *str)
@@ -543,7 +556,7 @@ static int acpt_puts(BIO *bp, const char *str)
 
     n = strlen(str);
     ret = acpt_write(bp, str, n);
-    return (ret);
+    return ret;
 }
 
 BIO *BIO_new_accept(const char *str)
@@ -552,11 +565,11 @@ BIO *BIO_new_accept(const char *str)
 
     ret = BIO_new(BIO_s_accept());
     if (ret == NULL)
-        return (NULL);
-    if (BIO_set_accept_name(ret, str))
-        return (ret);
+        return NULL;
+    if (BIO_set_accept_name(ret, str) > 0)
+        return ret;
     BIO_free(ret);
-    return (NULL);
+    return NULL;
 }
 
 #endif

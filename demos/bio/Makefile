@@ -27,4 +27,7 @@ server-cmod: server-cmod.o
 server-conf: server-conf.o
 
 client-arg client-conf saccept sconnect server-arg server-cmod server-conf:
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
+clean:
+	$(RM) *.o client-arg client-conf saccept sconnect server-arg server-cmod server-conf

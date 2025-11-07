@@ -1,7 +1,7 @@
 /*
- * Copyright 2000-2018 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2000-2024 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
@@ -10,7 +10,8 @@
 #include <stdio.h>
 #include <string.h>
 #include "internal/cryptlib.h"
-#include "internal/asn1_int.h"
+#include "internal/sizes.h"
+#include "crypto/asn1.h"
 #include <openssl/crypto.h>
 #include <openssl/x509.h>
 #include <openssl/asn1.h>
@@ -32,7 +33,7 @@
                   ASN1_STRFLGS_ESC_MSB)
 
 /*
- * Three IO functions for sending data to memory, a BIO and and a FILE
+ * Three IO functions for sending data to memory, a BIO and a FILE
  * pointer.
  */
 static int send_bio_chars(void *arg, const void *buf, int len)
@@ -152,13 +153,13 @@ static int do_buf(unsigned char *buf, int buflen,
     switch (charwidth) {
     case 4:
         if (buflen & 3) {
-            ASN1err(ASN1_F_DO_BUF, ASN1_R_INVALID_UNIVERSALSTRING_LENGTH);
+            ERR_raise(ERR_LIB_ASN1, ASN1_R_INVALID_UNIVERSALSTRING_LENGTH);
             return -1;
         }
         break;
     case 2:
         if (buflen & 1) {
-            ASN1err(ASN1_F_DO_BUF, ASN1_R_INVALID_BMPSTRING_LENGTH);
+            ERR_raise(ERR_LIB_ASN1, ASN1_R_INVALID_BMPSTRING_LENGTH);
             return -1;
         }
         break;
@@ -280,9 +281,12 @@ static int do_dump(unsigned long lflags, char_io *io_ch, void *arg,
     t.type = str->type;
     t.value.ptr = (char *)str;
     der_len = i2d_ASN1_TYPE(&t, NULL);
-    der_buf = OPENSSL_malloc(der_len);
-    if (der_buf == NULL)
+    if (der_len <= 0)
         return -1;
+    if ((der_buf = OPENSSL_malloc(der_len)) == NULL) {
+        ERR_raise(ERR_LIB_ASN1, ERR_R_MALLOC_FAILURE);
+        return -1;
+    }
     p = der_buf;
     i2d_ASN1_TYPE(&t, &p);
     outlen = do_hex_dump(io_ch, arg, der_buf, der_len);
@@ -301,12 +305,22 @@ static int do_dump(unsigned long lflags, char_io *io_ch, void *arg,
 static const signed char tag2nbyte[] = {
     -1, -1, -1, -1, -1,         /* 0-4 */
     -1, -1, -1, -1, -1,         /* 5-9 */
-    -1, -1, 0, -1,              /* 10-13 */
-    -1, -1, -1, -1,             /* 15-17 */
-    1, 1, 1,                    /* 18-20 */
-    -1, 1, 1, 1,                /* 21-24 */
-    -1, 1, -1,                  /* 25-27 */
-    4, -1, 2                    /* 28-30 */
+    -1, -1,                     /* 10-11 */
+     0,                         /* 12 V_ASN1_UTF8STRING */
+    -1, -1, -1, -1, -1,         /* 13-17 */
+     1,                         /* 18 V_ASN1_NUMERICSTRING */
+     1,                         /* 19 V_ASN1_PRINTABLESTRING */
+     1,                         /* 20 V_ASN1_T61STRING */
+    -1,                         /* 21 */
+     1,                         /* 22 V_ASN1_IA5STRING */
+     1,                         /* 23 V_ASN1_UTCTIME */
+     1,                         /* 24 V_ASN1_GENERALIZEDTIME */
+    -1,                         /* 25 */
+     1,                         /* 26 V_ASN1_ISO64STRING */
+    -1,                         /* 27 */
+     4,                         /* 28 V_ASN1_UNIVERSALSTRING */
+    -1,                         /* 29 */
+     2                          /* 30 V_ASN1_BMPSTRING */
 };
 
 /*
@@ -332,8 +346,10 @@ static int do_print_ex(char_io *io_ch, void *arg, unsigned long lflags,
 
     if (lflags & ASN1_STRFLGS_SHOW_TYPE) {
         const char *tagname;
+
         tagname = ASN1_tag2str(type);
-        outlen += strlen(tagname);
+        /* We can directly cast here as tagname will never be too large. */
+        outlen += (int)strlen(tagname);
         if (!io_ch(arg, tagname, outlen) || !io_ch(arg, ":", 1))
             return -1;
         outlen++;
@@ -359,7 +375,7 @@ static int do_print_ex(char_io *io_ch, void *arg, unsigned long lflags,
 
     if (type == -1) {
         len = do_dump(lflags, io_ch, arg, str);
-        if (len < 0)
+        if (len < 0 || len > INT_MAX - outlen)
             return -1;
         outlen += len;
         return outlen;
@@ -378,7 +394,7 @@ static int do_print_ex(char_io *io_ch, void *arg, unsigned long lflags,
     }
 
     len = do_buf(str->data, str->length, type, flags, &quotes, io_ch, NULL);
-    if (len < 0)
+    if (len < 0 || len > INT_MAX - 2 - outlen)
         return -1;
     outlen += len;
     if (quotes)
