@@ -53,10 +53,8 @@ static void *seed_src_new(void *provctx, void *parent,
     }
 
     s = OPENSSL_zalloc(sizeof(*s));
-    if (s == NULL) {
-        ERR_raise(ERR_LIB_PROV, ERR_R_MALLOC_FAILURE);
+    if (s == NULL)
         return NULL;
-    }
 
     s->provctx = provctx;
     s->state = EVP_RAND_STATE_UNINITIALISED;
@@ -90,8 +88,8 @@ static int seed_src_uninstantiate(void *vseed)
 static int seed_src_generate(void *vseed, unsigned char *out, size_t outlen,
                              unsigned int strength,
                              ossl_unused int prediction_resistance,
-                             ossl_unused const unsigned char *adin,
-                             ossl_unused size_t adin_len)
+                             const unsigned char *adin,
+                             size_t adin_len)
 {
     PROV_SEED_SRC *s = (PROV_SEED_SRC *)vseed;
     size_t entropy_available;
@@ -106,15 +104,20 @@ static int seed_src_generate(void *vseed, unsigned char *out, size_t outlen,
 
     pool = ossl_rand_pool_new(strength, 1, outlen, outlen);
     if (pool == NULL) {
-        ERR_raise(ERR_LIB_PROV, ERR_R_MALLOC_FAILURE);
+        ERR_raise(ERR_LIB_PROV, ERR_R_RAND_LIB);
         return 0;
     }
 
     /* Get entropy by polling system entropy sources. */
     entropy_available = ossl_pool_acquire_entropy(pool);
 
-    if (entropy_available > 0)
+    if (entropy_available > 0) {
+        if (!ossl_rand_pool_adin_mix_in(pool, adin, adin_len)) {
+            ossl_rand_pool_free(pool);
+            return 0;
+        }
         memcpy(out, ossl_rand_pool_buffer(pool), ossl_rand_pool_length(pool));
+    }
 
     ossl_rand_pool_free(pool);
     return entropy_available > 0;
@@ -181,7 +184,6 @@ static size_t seed_get_seed(void *vseed, unsigned char **pout,
 {
     size_t ret = 0;
     size_t entropy_available = 0;
-    size_t i;
     RAND_POOL *pool;
 
     pool = ossl_rand_pool_new(entropy, 1, min_len, max_len);
@@ -193,13 +195,10 @@ static size_t seed_get_seed(void *vseed, unsigned char **pout,
     /* Get entropy by polling system entropy sources. */
     entropy_available = ossl_pool_acquire_entropy(pool);
 
-    if (entropy_available > 0) {
+    if (entropy_available > 0
+        && ossl_rand_pool_adin_mix_in(pool, adin, adin_len)) {
         ret = ossl_rand_pool_length(pool);
         *pout = ossl_rand_pool_detach(pool);
-
-        /* xor the additional data into the output */
-        for (i = 0 ; i < adin_len ; ++i)
-            (*pout)[i % ret] ^= adin[i];
     } else {
         ERR_raise(ERR_LIB_PROV, PROV_R_ENTROPY_SOURCE_STRENGTH_TOO_WEAK);
     }
@@ -246,5 +245,5 @@ const OSSL_DISPATCH ossl_seed_src_functions[] = {
       (void(*)(void))seed_src_verify_zeroization },
     { OSSL_FUNC_RAND_GET_SEED, (void(*)(void))seed_get_seed },
     { OSSL_FUNC_RAND_CLEAR_SEED, (void(*)(void))seed_clear_seed },
-    { 0, NULL }
+    OSSL_DISPATCH_END
 };

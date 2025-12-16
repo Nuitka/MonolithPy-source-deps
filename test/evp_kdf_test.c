@@ -273,9 +273,9 @@ static int do_kdf_hkdf_gettables(int expand_only, int has_digest)
             goto err;
     }
 
-    /* Get params returns -2 if an unsupported parameter is requested */
+    /* Get params returns 1 if an unsupported parameter is requested */
     params_get[0] = OSSL_PARAM_construct_end();
-    if (!TEST_int_eq(EVP_KDF_CTX_get_params(kctx, params_get), -2))
+    if (!TEST_int_eq(EVP_KDF_CTX_get_params(kctx, params_get), 1))
         goto err;
     ret = 1;
 err:
@@ -1741,7 +1741,7 @@ static int test_kdf_sshkdf(void)
     return ret;
 }
 
-static int test_kdfs_same( EVP_KDF *kdf1, EVP_KDF *kdf2)
+static int test_kdfs_same(EVP_KDF *kdf1, EVP_KDF *kdf2)
 {
     /* Fast path in case the two are the same algorithm pointer */
     if (kdf1 == kdf2)
@@ -1777,7 +1777,7 @@ static int test_kdf_get_kdf(void)
         || !TEST_ptr(kdf2 = EVP_KDF_fetch(NULL, LN_tls1_prf, NULL))
         || !test_kdfs_same(kdf1, kdf2))
         ok = 0;
-    /* kdf1 is re-used below, so don't free it here */
+    /* kdf1 is reused below, so don't free it here */
     EVP_KDF_free(kdf2);
     kdf2 = NULL;
 
@@ -1860,6 +1860,114 @@ static int test_kdf_krb5kdf(void)
         && TEST_int_gt(EVP_KDF_derive(kctx, out, sizeof(out), params), 0)
         && TEST_mem_eq(out, sizeof(out), expected, sizeof(expected));
 
+    EVP_KDF_CTX_free(kctx);
+    return ret;
+}
+
+static int test_kdf_hmac_drbg_settables(void)
+{
+    int ret = 0, i = 0, j = 0;
+    EVP_KDF_CTX *kctx = NULL;
+    const OSSL_PARAM *settableparams;
+    OSSL_PARAM params[5];
+    static const unsigned char ent[32] = { 0 };
+    unsigned char out[32];
+    char digestname[32];
+    char macname[32];
+    EVP_MD *shake256 = NULL;
+
+    /* Test there are settables */
+    if (!TEST_ptr(kctx = get_kdfbyname(OSSL_KDF_NAME_HMACDRBGKDF))
+            || !TEST_ptr(settableparams = EVP_KDF_CTX_settable_params(kctx)))
+        goto err;
+
+    /* Fail if no params have been set when doing a derive */
+    if (!TEST_int_le(EVP_KDF_derive(kctx, out, sizeof(out), NULL), 0))
+        goto err;
+
+    /* Fail if we pass the wrong type for params */
+    params[1] = OSSL_PARAM_construct_end();
+    for (i = 0; settableparams[i].key != NULL; ++i) {
+        /* Skip "properties" key since it returns 1 unless the digest is also set */
+        if (OPENSSL_strcasecmp(settableparams[i].key,
+                               OSSL_KDF_PARAM_PROPERTIES) != 0) {
+            TEST_note("Testing set int into %s fails", settableparams[i].key);
+            params[0] = OSSL_PARAM_construct_int(settableparams[i].key, &j);
+            if (!TEST_int_le(EVP_KDF_CTX_set_params(kctx, params), 0))
+                goto err;
+        }
+    }
+    /* Test that we can set values multiple times */
+    params[0] = OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_HMACDRBG_ENTROPY,
+                                                  (char *)ent, sizeof(ent));
+    params[1] = OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_HMACDRBG_NONCE,
+                                                  (char *)ent, sizeof(ent));
+    params[2] = OSSL_PARAM_construct_utf8_string(OSSL_ALG_PARAM_DIGEST, "SHA256",
+                                                 0);
+    params[3] = OSSL_PARAM_construct_utf8_string(OSSL_ALG_PARAM_PROPERTIES, "",
+                                                 0);
+    params[4] = OSSL_PARAM_construct_end();
+    if (!TEST_int_eq(EVP_KDF_CTX_set_params(kctx, params), 1))
+        goto err;
+    if (!TEST_int_eq(EVP_KDF_CTX_set_params(kctx, params), 1))
+        goto err;
+    /* Test we can retrieve values back */
+    params[0] = OSSL_PARAM_construct_utf8_string(OSSL_ALG_PARAM_DIGEST,
+                                                 digestname, sizeof(digestname));
+    params[1] = OSSL_PARAM_construct_utf8_string(OSSL_ALG_PARAM_MAC,
+                                                 macname, sizeof(macname));
+    params[2] = OSSL_PARAM_construct_end();
+    if (!TEST_int_eq(EVP_KDF_CTX_get_params(kctx, params), 1)
+            || !TEST_mem_eq(digestname, params[0].return_size, "SHA2-256", 8)
+            || !TEST_mem_eq(macname, params[1].return_size, "HMAC", 4))
+        goto err;
+
+    /* Test the derive */
+    if (!TEST_int_eq(EVP_KDF_derive(kctx, out, sizeof(out), NULL), 1))
+        goto err;
+
+    /* test that XOF digests are not allowed */
+    params[0] = OSSL_PARAM_construct_utf8_string(OSSL_ALG_PARAM_DIGEST,
+                                                 "shake256", 0);
+    params[1] = OSSL_PARAM_construct_end();
+    if (!TEST_int_le(EVP_KDF_CTX_set_params(kctx, params), 0))
+        goto err;
+
+    ret = 1;
+err:
+    EVP_MD_free(shake256);
+    EVP_KDF_CTX_free(kctx);
+    return ret;
+}
+
+static int test_kdf_hmac_drbg_gettables(void)
+{
+    int ret = 0, i, j = 0;
+    EVP_KDF_CTX *kctx = NULL;
+    const OSSL_PARAM *gettableparams;
+    OSSL_PARAM params[3];
+    char buf[64];
+
+    /* Test there are gettables */
+    if (!TEST_ptr(kctx = get_kdfbyname(OSSL_KDF_NAME_HMACDRBGKDF))
+            || !TEST_ptr(gettableparams = EVP_KDF_CTX_gettable_params(kctx)))
+        goto err;
+    /* Fail if we pass the wrong type for params */
+    params[1] = OSSL_PARAM_construct_end();
+    for (i = 0; gettableparams[i].key != NULL; ++i) {
+        params[0] = OSSL_PARAM_construct_int(gettableparams[i].key, &j);
+        if (!TEST_int_le(EVP_KDF_CTX_get_params(kctx, params), 0))
+            goto err;
+    }
+    /* fail to get params if they are not set yet */
+    for (i = 0; gettableparams[i].key != NULL; ++i) {
+        params[0] = OSSL_PARAM_construct_utf8_string(gettableparams[i].key,
+                                                     buf, sizeof(buf));
+        if (!TEST_int_le(EVP_KDF_CTX_get_params(kctx, params), 0))
+            goto err;
+    }
+    ret = 1;
+err:
     EVP_KDF_CTX_free(kctx);
     return ret;
 }
@@ -1983,6 +2091,8 @@ int setup_tests(void)
     ADD_TEST(test_kdf_x942_asn1);
 #endif
     ADD_TEST(test_kdf_krb5kdf);
+    ADD_TEST(test_kdf_hmac_drbg_settables);
+    ADD_TEST(test_kdf_hmac_drbg_gettables);
     ADD_TEST(test_kbkdf_mac_change);
     return 1;
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2007-2016 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2007-2023 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -21,7 +21,6 @@ int main(int argc, char **argv)
     int ret = EXIT_FAILURE;
 
     /*
-     * On OpenSSL 0.9.9 only:
      * for streaming set PKCS7_STREAM
      */
     int flags = PKCS7_STREAM;
@@ -47,8 +46,8 @@ int main(int argc, char **argv)
         goto err;
 
     /*
-     * sk_X509_pop_free will free up recipient STACK and its contents so set
-     * rcert to NULL so it isn't freed up twice.
+     * OSSL_STACK_OF_X509_free() will free up recipient STACK and its contents
+     * so set rcert to NULL so it isn't freed up twice.
      */
     rcert = NULL;
 
@@ -73,8 +72,9 @@ int main(int argc, char **argv)
     if (!SMIME_write_PKCS7(out, p7, in, flags))
         goto err;
 
-    ret = EXIT_SUCCESS;
+    printf("Success\n");
 
+    ret = EXIT_SUCCESS;
  err:
     if (ret != EXIT_SUCCESS) {
         fprintf(stderr, "Error Encrypting Data\n");
@@ -82,10 +82,9 @@ int main(int argc, char **argv)
     }
     PKCS7_free(p7);
     X509_free(rcert);
-    sk_X509_pop_free(recips, X509_free);
+    OSSL_STACK_OF_X509_free(recips);
     BIO_free(in);
     BIO_free(out);
     BIO_free(tbio);
     return ret;
-
 }

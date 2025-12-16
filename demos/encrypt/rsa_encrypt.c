@@ -1,5 +1,5 @@
 /*-
- * Copyright 2021-2022 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2021 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -151,7 +151,7 @@ cleanup:
     return ret;
 }
 
-static int do_decrypt(OSSL_LIB_CTX *libctx, const char *in, size_t in_len,
+static int do_decrypt(OSSL_LIB_CTX *libctx, const unsigned char *in, size_t in_len,
                       unsigned char **out, size_t *out_len)
 {
     int ret = 0, public = 0;
