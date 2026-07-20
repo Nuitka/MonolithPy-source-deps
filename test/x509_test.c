@@ -1,5 +1,5 @@
 /*
- * Copyright 2022-2025 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2022-2026 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -96,9 +96,24 @@ static int test_x509_tbs_cache(void)
     const unsigned char *p = certdata;
 
     ret = TEST_ptr(x = d2i_X509(NULL, &p, sizeof(certdata)))
-          && TEST_int_gt(X509_sign(x, privkey, signmd), 0)
-          && TEST_int_eq(X509_verify(x, pubkey), 1);
+        && TEST_int_gt(X509_sign(x, privkey, signmd), 0)
+        && TEST_int_eq(X509_verify(x, pubkey), 1);
     X509_free(x);
+    return ret;
+}
+
+static int test_x509_verify_with_new(void)
+{
+    int ret;
+    EVP_PKEY *pkey = NULL;
+    X509 *x = NULL;
+
+    ret = TEST_ptr(x = X509_new())
+        && TEST_ptr(pkey = EVP_PKEY_new())
+        && TEST_int_eq(X509_verify(x, pkey), -1)
+        && TEST_int_eq(X509_verify(x, pubkey), -1);
+    X509_free(x);
+    EVP_PKEY_free(pkey);
     return ret;
 }
 
@@ -114,8 +129,8 @@ static int test_x509_crl_tbs_cache(void)
     const unsigned char *p = crldata;
 
     ret = TEST_ptr(crl = d2i_X509_CRL(NULL, &p, sizeof(crldata)))
-          && TEST_int_gt(X509_CRL_sign(crl, privkey, signmd), 0)
-          && TEST_int_eq(X509_CRL_verify(crl, pubkey), 1);
+        && TEST_int_gt(X509_CRL_sign(crl, privkey, signmd), 0)
+        && TEST_int_eq(X509_CRL_verify(crl, pubkey), 1);
 
     X509_CRL_free(crl);
     return ret;
@@ -152,14 +167,16 @@ static int test_asn1_item_verify(void)
     X509_get0_signature(&sig, &alg, x509);
 
     if (!TEST_int_gt(ASN1_item_verify(ASN1_ITEM_rptr(X509_CINF),
-                                      (X509_ALGOR *)alg, (ASN1_BIT_STRING *)sig,
-                                      &x509->cert_info, pkey), 0))
+                         (X509_ALGOR *)alg, (ASN1_BIT_STRING *)sig,
+                         &x509->cert_info, pkey),
+            0))
         goto err;
 
     ERR_set_mark();
     if (!TEST_int_lt(ASN1_item_verify(ASN1_ITEM_rptr(X509_CINF),
-                                     (X509_ALGOR *)alg, (ASN1_BIT_STRING *)sig,
-                                     NULL, pkey), 0)) {
+                         (X509_ALGOR *)alg, (ASN1_BIT_STRING *)sig,
+                         NULL, pkey),
+            0)) {
         ERR_clear_last_mark();
         goto err;
     }
@@ -167,7 +184,7 @@ static int test_asn1_item_verify(void)
 
     ret = 1;
 
- err:
+err:
 #ifndef OPENSSL_NO_DEPRECATED_3_0
     RSA_free(rsa);
 #endif
@@ -229,7 +246,7 @@ static int test_x509_crl_delete_last_extension(void)
         /* There should now be an extension list. */
         || !TEST_ptr(X509_CRL_get0_extensions(crl))
         || !TEST_int_eq(sk_X509_EXTENSION_num(X509_CRL_get0_extensions(crl)),
-                        1))
+            1))
         goto err;
 
     /* Delete the extension. */
@@ -319,6 +336,7 @@ int setup_tests(void)
     ADD_TEST(test_x509_delete_last_extension);
     ADD_TEST(test_x509_crl_delete_last_extension);
     ADD_TEST(test_x509_revoked_delete_last_extension);
+    ADD_TEST(test_x509_verify_with_new);
     return 1;
 }
 
